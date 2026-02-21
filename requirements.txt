@@ -6,3 +6,4 @@ plotly
 pandas
 fpdf2
 ultralytics
+supabase

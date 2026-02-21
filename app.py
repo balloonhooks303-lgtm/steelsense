@@ -10,7 +10,10 @@ import base64
 import json
 from datetime import datetime
 import io
-from fpdf import FPDF
+try:
+    from fpdf import FPDF
+except ImportError:
+    from fpdf2 import FPDF
 import tempfile
 import os
 from ultralytics import YOLO
@@ -285,7 +288,8 @@ def generate_pdf(image_pil, detections, timestamp):
 
 # ─── Industrial Conveyor HTML Component ──────────────────────────────────────
 def get_arm_html(trigger=False, defect_info=None):
-    html_path = os.path.join(os.path.dirname(__file__), 'industrial_conveyor_enhanced.html')
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    html_path = os.path.join(base_dir, 'industrial_conveyor_enhanced.html')
     with open(html_path, 'r', encoding='utf-8') as f:
         return f.read()
 

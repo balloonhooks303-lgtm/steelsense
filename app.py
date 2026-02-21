@@ -404,7 +404,7 @@ function animate(){{
     document.getElementById(mboxIds[mi]).className='mb active';
     // Pulse laser on the arc before this machine
     if(mi>0) laserMats[mi-1].opacity=0.4+Math.sin(t*10)*0.35;
-    stEl.textContent=`🔍 MCH-${mCodes[mi]}: ${mNames[mi]}`;
+    stEl.textContent='🔍 MCH-'+mCodes[mi]+': '+mNames[mi];
     stEl.style.color='#ffaa00';
 
     if(phaseT>2.8){{

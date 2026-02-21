@@ -368,6 +368,8 @@ const stEl=document.getElementById('st');
 const mPosArr=[-18,-9,0,9,18];
 const mCodes=['A','B','C','D','E'];
 const mNames=['Rolling Mill','Heat Treatment','Surface Grinder','Edge Cutter','Final Polish'];
+const machineCodes=mCodes;
+const MACHINE_NAMES=mNames;
 
 function setLight(i,hex,em){{ machineLightMats[i].color.setHex(hex); machineLightMats[i].emissive.setHex(em); }}
 function lerp(a,b,t){{return a+(b-a)*Math.min(t,1);}}

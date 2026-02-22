@@ -7,7 +7,6 @@ import plotly.graph_objects as go
 import pandas as pd
 import time
 import base64
-import json
 from datetime import datetime
 import io
 try:
@@ -16,7 +15,51 @@ except ImportError:
     from fpdf2 import FPDF
 import tempfile
 import os
-from ultralytics import YOLO
+import urllib.request
+import json
+
+# ─── Supabase Config ──────────────────────────────────────────────────────────
+SUPABASE_URL = "https://idoekdwhxlxahnfnzvtd.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlkb2VrZHdoeGx4YWhuZm56dnRkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE2ODUyODgsImV4cCI6MjA4NzI2MTI4OH0.mNGjvmgivp873dHYZwz9_V4GdUP1l_YcN0KQa6Gxi8k"
+
+def save_to_supabase(date, time_val, machine_code, defect_type):
+    try:
+        data = json.dumps({
+            "date": str(date),
+            "time": str(time_val),
+            "machine_code": machine_code,
+            "defect_type": defect_type
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{SUPABASE_URL}/rest/v1/inspections",
+            data=data,
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal"
+            },
+            method="POST"
+        )
+        urllib.request.urlopen(req)
+        return True
+    except Exception as e:
+        st.warning(f"⚠️ DB Save Error: {e}")
+        return False
+
+def load_from_supabase():
+    try:
+        req = urllib.request.Request(
+            f"{SUPABASE_URL}/rest/v1/inspections?select=*&order=id.desc&limit=100",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}"
+            }
+        )
+        with urllib.request.urlopen(req) as response:
+            return json.loads(response.read().decode())
+    except Exception as e:
+        return []
 
 st.set_page_config(
     page_title="SteelSense AI",
@@ -170,8 +213,10 @@ if 'arm_trigger' not in st.session_state:
     st.session_state.arm_trigger = False
 if 'last_defect' not in st.session_state:
     st.session_state.last_defect = None
+if 'machine_code' not in st.session_state:
+    st.session_state.machine_code = 'A'
 
-# ─── Mock YOLO Detection (replace with real model) ───────────────────────────
+# ─── Defect Classes & Actions ─────────────────────────────────────────────────
 DEFECT_CLASSES = ['crazing', 'inclusion', 'patches', 'pitting', 'rolled-in_scale', 'scratches']
 
 ACTIONS = {
@@ -183,13 +228,13 @@ ACTIONS = {
     'scratches':       ('LOW',      '🟢', 'Accept with caution - Minor surface grinding at zone.')
 }
 
+# ─── Functions ────────────────────────────────────────────────────────────────
 def mock_detect(image_array):
     """Replace this with: model = YOLO('best.pt'); results = model(image_array)"""
     np.random.seed(int(image_array.mean()) % 100)
-    has_defect = np.random.random() > 0.25  # 75% chance of defect for demo
+    has_defect = np.random.random() > 0.25
     if not has_defect:
         return []
-
     num_defects = np.random.randint(1, 3)
     detections = []
     h, w = image_array.shape[:2]
@@ -227,31 +272,26 @@ def simulate_repair(image_array, detections):
     repaired = cv2.inpaint(img, mask, 5, cv2.INPAINT_TELEA)
     return repaired
 
-def generate_pdf(image_pil, detections, timestamp):
+def generate_pdf(image_pil, detections, timestamp, machine_code='A'):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_fill_color(10, 14, 26)
-
-    # Header
     pdf.set_font('Arial', 'B', 20)
     pdf.set_text_color(0, 180, 220)
     pdf.cell(0, 12, 'STEELSENSE AI - INSPECTION REPORT', ln=True, align='C')
     pdf.set_font('Arial', '', 9)
     pdf.set_text_color(100, 140, 180)
     pdf.cell(0, 6, f'Generated: {timestamp}', ln=True, align='C')
+    pdf.cell(0, 6, f'Machine Code: {machine_code}    |    Date: {datetime.now().strftime("%Y-%m-%d")}', ln=True, align='C')
     pdf.ln(5)
-
-    # Save and embed image
     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
         image_pil.save(tmp.name)
         pdf.image(tmp.name, x=10, y=35, w=90)
-
     pdf.set_y(35)
     pdf.set_x(110)
     pdf.set_font('Arial', 'B', 11)
     pdf.set_text_color(0, 212, 255)
     pdf.cell(0, 8, 'DEFECTS DETECTED', ln=True)
-
     for d in detections:
         severity, icon, action = ACTIONS[d['class']]
         pdf.set_x(110)
@@ -267,8 +307,6 @@ def generate_pdf(image_pil, detections, timestamp):
         pdf.set_text_color(80, 120, 160)
         pdf.multi_cell(80, 5, f'Action: {action}')
         pdf.ln(2)
-
-    # Summary
     pdf.set_y(140)
     pdf.set_font('Arial', 'B', 11)
     pdf.set_text_color(0, 212, 255)
@@ -280,7 +318,6 @@ def generate_pdf(image_pil, detections, timestamp):
     pdf.set_font('Arial', 'B', 18)
     pdf.set_text_color(*disp_color)
     pdf.cell(0, 12, disposition, ln=True)
-
     result = pdf.output()
     if isinstance(result, str):
         return result.encode('latin-1')
@@ -313,11 +350,13 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("**MODE**")
     mode = st.radio("", ["Single Image Inspection", "Batch Simulation"], label_visibility="collapsed")
-
     st.markdown("---")
     st.markdown("**SENSITIVITY**")
     sensitivity = st.slider("Detection Threshold", 0.5, 0.95, 0.72, 0.05)
-
+    st.markdown("---")
+    st.markdown("**🏷️ MACHINE CODE**")
+    machine_code = st.selectbox("Select Machine", ['A', 'B', 'C', 'D', 'E'], label_visibility="collapsed")
+    st.session_state.machine_code = machine_code
     st.markdown("---")
     st.markdown("**💰 COST ESTIMATOR**")
     parts_day = st.number_input("Parts/day", value=500, step=50)
@@ -329,7 +368,6 @@ with st.sidebar:
         <div class="metric-label">Est. Annual Savings</div>
     </div>
     """, unsafe_allow_html=True)
-
     st.markdown("---")
     if st.button("🗑️ RESET SESSION"):
         st.session_state.detections = []
@@ -361,15 +399,12 @@ col_left, col_right = st.columns([1, 1])
 
 with col_left:
     st.markdown('<div class="section-header">📤 IMAGE INSPECTION</div>', unsafe_allow_html=True)
-
-    # Input mode toggle
     input_mode = st.radio(
         "Select Input Mode",
         ["📁 Upload Image", "📷 Camera Capture"],
         horizontal=True,
         label_visibility="collapsed"
     )
-
     img_pil = None
     img_arr = None
 
@@ -380,8 +415,7 @@ with col_left:
             img_pil = Image.open(uploaded).convert('RGB')
             img_arr = np.array(img_pil)
             st.image(img_arr, caption="Uploaded Image", use_container_width=True)
-
-    else:  # Camera mode
+    else:
         st.markdown('<div class="section-header">📷 LIVE CAMERA CAPTURE</div>', unsafe_allow_html=True)
         camera_image = st.camera_input("Point camera at metal surface and capture")
         if camera_image:
@@ -400,28 +434,27 @@ with col_left:
                 if detections:
                     annotated = draw_detections(img_arr, detections)
                     repaired  = simulate_repair(img_arr, detections)
-
                     worst_sev = max(detections, key=lambda x: ['LOW','MEDIUM','CRITICAL'].index(ACTIONS[x['class']][0]))
                     sev = ACTIONS[worst_sev['class']][0]
-
                     if sev in ['CRITICAL', 'MEDIUM']:
                         st.session_state.rejected += 1
                     else:
                         st.session_state.accepted += 1
-
                     for d in detections:
                         severity, icon, action = ACTIONS[d['class']]
+                        now = datetime.now()
                         st.session_state.detections.append({
+                            'date': now.strftime('%Y-%m-%d'),
+                            'timestamp': now.strftime('%H:%M:%S'),
+                            'machine': st.session_state.machine_code,
                             'defect_type': d['class'],
                             'severity': severity,
-                            'confidence': d['confidence'],
-                            'timestamp': datetime.now().strftime('%H:%M:%S'),
+                            'confidence': round(d['confidence'], 4),
                             'action': action
                         })
-
+                        # ── Save to Supabase ──
+                        save_to_supabase(now.date(), now.strftime('%H:%M:%S'), st.session_state.machine_code, d['class'])
                     st.session_state.arm_trigger = True
-
-                    # Show images
                     tab1, tab2 = st.tabs(["🔍 Detected", "🔧 Simulated Repair"])
                     with tab1:
                         st.image(annotated, use_container_width=True)
@@ -433,8 +466,6 @@ with col_left:
                         with c2:
                             st.caption("INPAINTED")
                             st.image(repaired, use_container_width=True)
-
-                    # Defect cards
                     st.markdown('<div class="section-header">DEFECT ANALYSIS</div>', unsafe_allow_html=True)
                     for d in detections:
                         severity, icon, action = ACTIONS[d['class']]
@@ -446,12 +477,9 @@ with col_left:
                             Action: {action}
                         </div>
                         """, unsafe_allow_html=True)
-
-                    # PDF
                     st.markdown("<br>", unsafe_allow_html=True)
-                    pdf_bytes = generate_pdf(img_pil, detections, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                    pdf_bytes = generate_pdf(img_pil, detections, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), st.session_state.machine_code)
                     pdf_download_button(pdf_bytes, f"steelsense_report_{datetime.now().strftime('%H%M%S')}.pdf")
-
                 else:
                     st.session_state.accepted += 1
                     st.session_state.arm_trigger = False
@@ -459,14 +487,11 @@ with col_left:
                     st.success("✅ NO DEFECTS DETECTED — PART ACCEPTED")
 
 with col_right:
-    # Bin counters
     b1, b2 = st.columns(2)
     with b1:
         st.markdown(f'<div class="good-counter"><div class="good-value">{st.session_state.accepted}</div><div class="metric-label" style="color:#1a7a1a">✓ ACCEPTED</div></div>', unsafe_allow_html=True)
     with b2:
         st.markdown(f'<div class="bin-counter"><div class="bin-value">{st.session_state.rejected}</div><div class="metric-label" style="color:#7a1a1a">✗ REJECTED</div></div>', unsafe_allow_html=True)
-
-    # After arm triggers, reset trigger so next image starts fresh
     if st.session_state.arm_trigger:
         st.session_state.arm_trigger = False
 
@@ -484,9 +509,7 @@ st.markdown('<div class="section-header">📊 REAL-TIME ANALYTICS DASHBOARD</div
 
 if st.session_state.detections:
     df = pd.DataFrame(st.session_state.detections)
-
     ch1, ch2, ch3 = st.columns(3)
-
     with ch1:
         fig1 = px.bar(
             df.groupby('defect_type').size().reset_index(name='count'),
@@ -499,14 +522,12 @@ if st.session_state.detections:
             paper_bgcolor='#0d1b2e', plot_bgcolor='#0d1b2e',
             font=dict(color='#4a7fa5', family='Share Tech Mono'),
             title_font=dict(color='#00d4ff'),
-            showlegend=False,
-            coloraxis_showscale=False,
+            showlegend=False, coloraxis_showscale=False,
             margin=dict(l=10,r=10,t=40,b=10)
         )
         fig1.update_xaxes(gridcolor='#1a3a5c', tickfont=dict(size=9))
         fig1.update_yaxes(gridcolor='#1a3a5c')
         st.plotly_chart(fig1, use_container_width=True)
-
     with ch2:
         sev_counts = df['severity'].value_counts()
         fig2 = px.pie(
@@ -523,7 +544,6 @@ if st.session_state.detections:
             margin=dict(l=10,r=10,t=40,b=10)
         )
         st.plotly_chart(fig2, use_container_width=True)
-
     with ch3:
         fig3 = px.scatter(
             df, x='timestamp', y='confidence',
@@ -542,16 +562,38 @@ if st.session_state.detections:
         fig3.update_xaxes(gridcolor='#1a3a5c', tickfont=dict(size=8))
         fig3.update_yaxes(gridcolor='#1a3a5c', range=[0.5,1.0])
         st.plotly_chart(fig3, use_container_width=True)
-
-    # Recent detections table
     st.markdown('<div class="section-header">INSPECTION LOG</div>', unsafe_allow_html=True)
     st.dataframe(
-        df[['timestamp','defect_type','severity','confidence','action']].tail(10).iloc[::-1],
+        df[['date','timestamp','machine','defect_type','severity','confidence','action']].tail(20).iloc[::-1].rename(columns={
+            'date': 'Date',
+            'timestamp': 'Time',
+            'machine': 'Machine',
+            'defect_type': 'Defect Type',
+            'severity': 'Severity',
+            'confidence': 'Confidence',
+            'action': 'Action'
+        }),
         use_container_width=True,
         hide_index=True
     )
 else:
     st.info("Upload and inspect an image to see analytics populate here.")
+
+# ─── Supabase Database Log ────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown('<div class="section-header">🗄️ DATABASE LOG — SUPABASE RECORDS</div>', unsafe_allow_html=True)
+
+if st.button("🔄 Refresh Database Records"):
+    st.rerun()
+
+db_records = load_from_supabase()
+if db_records:
+    db_df = pd.DataFrame(db_records)[['id', 'date', 'time', 'machine_code', 'defect_type', 'created_at']]
+    db_df.columns = ['ID', 'Date', 'Time', 'Machine Code', 'Defect Type', 'Saved At']
+    st.dataframe(db_df, use_container_width=True, hide_index=True)
+    st.success(f"✅ {len(db_records)} records found in Supabase database")
+else:
+    st.info("No records yet. Run an inspection to save data to Supabase.")
 
 # Footer
 st.markdown("""
